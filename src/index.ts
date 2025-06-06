@@ -10,7 +10,7 @@ import authRoutes from "./routes/auth";
 import cors from "cors";
 import helmet from "helmet";
 import { connectDB } from "./config/database";
-import rateLimit from "express-rate-limit";
+import { loginLimiter } from "./middleware/ratelimiter";
 
 const app: Express = express();
 
@@ -39,13 +39,6 @@ app.use(
 );
 
 app.use(express.json());
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: "Too many login attempts from this IP, try after 15 mins",
-});
-
 app.use("/v1", authRoutes);
 app.use("/login/researcher", loginLimiter);
 app.use("/login/admin", loginLimiter);
