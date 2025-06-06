@@ -29,7 +29,7 @@ const generateToken = (id: string, role: UserRole): string => {
     throw new Error("JWT_SECRET not defined");
   }
 
-  const expiresIn = config.JWT_ACCESS_EXPIRE;
+  const expiresIn = process.env.JWT_ACCESS_EXPIRE || "15m";
 
   const payload = { id, role };
   const options: SignOptions = {
@@ -77,7 +77,11 @@ router.post(
     try {
       const { email, password } = req.body;
 
-      const user = await User.findOne({ email });
+      const user = (await User.findOne({ email })) as typeof User.prototype & {
+        _id: any;
+        role: UserRole;
+        password: string;
+      };
       if (!user || user.role !== "researcher") {
         res.status(401).json({ message: "Invalid email or password" });
         return;
@@ -105,7 +109,11 @@ router.post(
     try {
       const { email, password } = req.body;
 
-      const user = await User.findOne({ email });
+      const user = (await User.findOne({ email })) as typeof User.prototype & {
+        _id: any;
+        role: UserRole;
+        password: string;
+      };
       if (!user || user.role !== "admin") {
         res.status(401).json({ message: "Invalid email or password" });
         return;
