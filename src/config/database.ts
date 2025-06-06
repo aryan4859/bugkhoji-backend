@@ -1,19 +1,20 @@
-import mongoose from 'mongoose';
-import { logger } from '../utils/logger';
+import mongoose from "mongoose";
+import { config } from "../utils/config";
 
-export const connectDatabase = async (): Promise<void> => {
+const dbURL = config.MONGODB_URL;
+
+if (!dbURL) {
+  throw new Error("MONGODB_URL is not defined in the .env file");
+}
+
+const connectDB = async () => {
   try {
-    const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:8080/bugkhoji';
-    
-    await mongoose.connect(mongoUri, {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-    });
-    
-    logger.info('MongoDB connected successfully');
-  } catch (error) {
-    logger.error('MongoDB connection failed:', error);
+    await mongoose.connect(dbURL);
+    console.log("Connected to MongoDB");
+  } catch (err) {
+    console.error("Error connecting to MongoDB:", err);
     process.exit(1);
   }
 };
+
+export { connectDB };
