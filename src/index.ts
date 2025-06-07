@@ -5,12 +5,11 @@ import express, {
   NextFunction,
 } from "express";
 import { config } from "./utils/config";
-import logger from "./utils/logger";
 import authRoutes from "./routes/auth";
 import cors from "cors";
 import helmet from "helmet";
-import { connectDB } from "./config/database";
 import { loginLimiter } from "./middleware/ratelimiter";
+import  {logger} from "./utils/logger";
 
 const app: Express = express();
 
@@ -55,8 +54,8 @@ app.use((err: any, req: Request, res: Response, next: NextFunction): void => {
 });
 
 const PORT = config.PORT;
-connectDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Bugkhoj server is running at ${PORT}`);
-  });
+
+app.listen(PORT, () => {
+  console.log(`Bugkhoj server is running at ${PORT}`);
+  logger.info(`🚀 Bugkhoj server is running at http://localhost:${PORT}`);
 });

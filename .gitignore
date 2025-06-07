@@ -6,3 +6,5 @@ dist
 API
 .vscode
 scripts
+/src/generated/prisma
+logs
