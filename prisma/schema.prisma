@@ -20,8 +20,10 @@ model User {
   lastName     String
   email        String   @unique
   passwordHash String
+  passwordHash String
   role         UserRole @default(RESEARCHER)
   isActive     Boolean  @default(true)
+
 
   // Authentication & Session Management
   lastLogin             DateTime?
