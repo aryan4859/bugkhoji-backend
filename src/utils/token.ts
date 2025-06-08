@@ -1,92 +1,137 @@
-import jwt from "jsonwebtoken"
-import crypto from "crypto"
+import jwt, { type Secret, type SignOptions } from "jsonwebtoken"
+import bcrypt from "bcryptjs"
 import { PrismaClient } from "@prisma/client"
-import { logger } from "./logger"
 import { config } from "./config"
 
 const prisma = new PrismaClient()
 
-interface TokenPayload {
-  id: string
-  email: string
-  role: string
-}
+// ============================================================================
+// JWT TOKEN GENERATION
+// ============================================================================
 
-/**
- * Generate access token
- * @param payload - User data to include in token
- * @returns Access token
- */
-export function generateAccessToken(payload: TokenPayload): string {
-  return jwt.sign(payload, config.JWT_SECRET as string, {
-    expiresIn: config.JWT_ACCESS_EXPIRE as string | number,
-  })
-}
-
-/**
- * Generate refresh token
- * @param userId - User ID
- * @returns Refresh token and its hash
- */
-export async function generateRefreshToken(userId: string): Promise<{ token: string; hash: string }> {
-  // Generate a random token
-  const refreshToken = crypto.randomBytes(40).toString("hex")
-
-  // Hash the token for storage
-  const refreshTokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex")
-
-  // Store the hashed token in the database
+export const generateRefreshToken = async (userId: string): Promise<{ token: string; expiresAt: Date }> => {
   try {
+    const secret = config.JWT_SECRET
+    if (!secret) {
+      throw new Error("JWT_SECRET not defined")
+    }
+
+    // Create payload for refresh token
+    const payload = {
+      id: userId,
+      type: "refresh",
+      iat: Math.floor(Date.now() / 1000),
+    }
+
+    // Set expiration time (7 days)
+    const expiresIn = "7d"
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
+
+    // Generate JWT token with proper typing
+    const token = jwt.sign(payload, secret as Secret, {
+      expiresIn,
+    } as SignOptions)
+
+    // Hash the token for database storage
+    const tokenHash = await bcrypt.hash(token, 10)
+
+    // Store refresh token hash in database
+    // Note: Make sure your User model has a refreshTokenHash field
     await prisma.user.update({
       where: { id: userId },
-      data: { refreshTokenHash },
+      data: { 
+        refreshTokenHash: tokenHash,
+        refreshTokenExpiresAt: expiresAt,
+      } as any, // Type assertion to bypass Prisma type issues
     })
 
-    return { token: refreshToken, hash: refreshTokenHash }
+    return { token, expiresAt }
   } catch (error) {
-    logger.error("Error storing refresh token:", error)
-    throw new Error("Failed to generate refresh token")
+    throw new Error(`Failed to generate refresh token: ${error}`)
   }
 }
 
-/**
- * Verify refresh token
- * @param token - Refresh token
- * @param userId - User ID
- * @returns Boolean indicating if token is valid
- */
-export async function verifyRefreshToken(token: string, userId: string): Promise<boolean> {
-  try {
-    // Hash the provided token
-    const tokenHash = crypto.createHash("sha256").update(token).digest("hex")
+// ============================================================================
+// TOKEN VERIFICATION
+// ============================================================================
 
-    // Find the user with this token hash
-    const user = await prisma.user.findFirst({
-      where: {
-        id: userId,
-        refreshTokenHash: tokenHash,
+export const verifyRefreshToken = async (token: string, userId: string): Promise<boolean> => {
+  try {
+    const secret = config.JWT_SECRET
+    if (!secret) {
+      throw new Error("JWT_SECRET not defined")
+    }
+
+    // Verify JWT token
+    const decoded = jwt.verify(token, secret as Secret) as { id: string; type: string }
+    
+    if (decoded.id !== userId || decoded.type !== "refresh") {
+      return false
+    }
+
+    // Get stored token hash from database
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { 
+        refreshTokenHash: true, 
+        refreshTokenExpiresAt: true,
+        isActive: true 
       },
     })
 
-    return !!user
+    if (!user || !user.refreshTokenHash || !user.isActive) {
+      return false
+    }
+
+    // Check if token is expired
+    if (user.refreshTokenExpiresAt && user.refreshTokenExpiresAt < new Date()) {
+      return false
+    }
+
+    // Compare provided token with stored hash
+    const isValid = await bcrypt.compare(token, user.refreshTokenHash)
+    return isValid
   } catch (error) {
-    logger.error("Error verifying refresh token:", error)
     return false
   }
 }
 
-/**
- * Invalidate refresh token
- * @param userId - User ID
- */
-export async function invalidateRefreshToken(userId: string): Promise<void> {
+// ============================================================================
+// TOKEN INVALIDATION
+// ============================================================================
+
+export const invalidateRefreshToken = async (userId: string): Promise<void> => {
   try {
     await prisma.user.update({
       where: { id: userId },
-      data: { refreshTokenHash: null },
+      data: { 
+        refreshTokenHash: null,
+        refreshTokenExpiresAt: null,
+      } as any, // Type assertion to bypass Prisma type issues
     })
   } catch (error) {
-    logger.error("Error invalidating refresh token:", error)
-    throw new Error("Failed to invalidate refresh token")
+    throw new Error(`Failed to invalidate refresh token: ${error}`)
+  }
+}
+
+// ============================================================================
+// TOKEN CLEANUP (Optional utility)
+// ============================================================================
+
+export const cleanupExpiredTokens = async (): Promise<void> => {
+  try {
+    await prisma.user.updateMany({
+      where: {
+        refreshTokenExpiresAt: {
+          lt: new Date(),
+        },
+      },
+      data: {
+        refreshTokenHash: null,
+        refreshTokenExpiresAt: null,
+      } as any, // Type assertion to bypass Prisma type issues
+    })
+  } catch (error) {
+    throw new Error(`Failed to cleanup expired tokens: ${error}`)
   }
 }

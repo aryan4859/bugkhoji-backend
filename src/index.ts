@@ -12,7 +12,7 @@ import { loginLimiter } from "./middleware/ratelimiter";
 import  {logger} from "./utils/logger";
 
 const app: Express = express();
-
+import { connectDB, disconnectDB } from './database/database';
 const CORS_WHITELIST = [
   "http://localhost:4001",
   "https://bugkhoji.com",
@@ -55,7 +55,26 @@ app.use((err: any, req: Request, res: Response, next: NextFunction): void => {
 
 const PORT = config.PORT;
 
-app.listen(PORT, () => {
-  console.log(`Bugkhoj server is running at ${PORT}`);
-  logger.info(`🚀 Bugkhoj server is running at http://localhost:${PORT}`);
+async function startServer() {
+  await connectDB();
+  
+  app.listen(PORT, () => {
+    console.log(`Bugkhoj server is running at ${PORT}`);
+    logger.info(`🚀 Bugkhoj server is running at http://localhost:${PORT}`);
+  });
+}
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('🔄 Shutting down gracefully...');
+  await disconnectDB();
+  process.exit(0);
 });
+
+process.on('SIGTERM', async () => {
+  console.log('🔄 Shutting down gracefully...');
+  await disconnectDB();
+  process.exit(0);
+});
+
+startServer();

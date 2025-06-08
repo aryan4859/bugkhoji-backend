@@ -1,22 +1,20 @@
 import { Request, Response, NextFunction } from "express";
-import { Schema } from "joi";
+import { ZodSchema } from "zod";
 
 export const validate =
-  (schema: Schema) =>
+  (schema: ZodSchema) =>
   (req: Request, res: Response, next: NextFunction): void => {
-    const { error } = schema.validate(req.body, {
-      abortEarly: false,
-      allowUnknown: false,
-      stripUnknown: true,
-    });
+    const result = schema.safeParse(req.body);
 
-    if (error) {
+    if (!result.success) {
       res.status(400).json({
         message: "Validation error",
-        details: error.details.map((d) => d.message),
+        details: result.error.errors.map((err) => err.message),
       });
       return;
     }
 
+    // Replace body with parsed data (optional, but ensures type safety)
+    req.body = result.data;
     next();
   };
