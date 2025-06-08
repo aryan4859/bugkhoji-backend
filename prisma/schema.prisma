@@ -19,20 +19,34 @@ model User {
   firstName    String
   lastName     String
   email        String   @unique
-  passwordHash String   
+  passwordHash String
   role         UserRole @default(RESEARCHER)
   isActive     Boolean  @default(true)
-  
+
   // Authentication & Session Management
-  lastLogin            DateTime?
-  refreshTokenHash     String?   // Store hashed refresh tokens
+  lastLogin             DateTime?
+  refreshTokenHash      String? // Store hashed refresh tokens
   refreshTokenExpiresAt DateTime? // Track token expiration
-  
+
   // Timestamps
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  Session   Session[]
 
   @@map("users")
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  ip         String
+  userAgent  String
+  device     String?
+  location   String?
+  tokenHash  String   @unique
+  createdAt  DateTime @default(now())
+  lastActive DateTime @updatedAt
 }
 
 enum UserRole {
