@@ -10,6 +10,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { loginLimiter } from "./middleware/ratelimiter";
 import  {logger} from "./utils/logger";
+import { seedAdmin } from "./utils/adminSeeder";
 
 const app: Express = express();
 import { connectDB, disconnectDB } from './database/database';
@@ -56,12 +57,13 @@ app.use((err: any, req: Request, res: Response, next: NextFunction): void => {
 const PORT = config.PORT;
 
 async function startServer() {
-  await connectDB();
+  await connectDB()
+  await seedAdmin()
   
   app.listen(PORT, () => {
-    console.log(`Bugkhoj server is running at ${PORT}`);
-    logger.info(`🚀 Bugkhoj server is running at http://localhost:${PORT}`);
-  });
+    console.log(`Bugkhoj server is running at ${PORT}`)
+    logger.info(`🚀 Bugkhoj server is running at http://localhost:${PORT}`)
+  })
 }
 
 // Graceful shutdown

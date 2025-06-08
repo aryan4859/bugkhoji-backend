@@ -28,7 +28,14 @@ export const config = {
 
   // Logging
   LOG_LEVEL: process.env.LOG_LEVEL || "info",
-}
+
+  // Admin
+  ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+  ADMIN_USERNAME: process.env.ADMIN_USERNAME,
+  ADMIN_FIRST_NAME: process.env.ADMIN_FIRST_NAME,
+  ADMIN_LAST_NAME: process.env.ADMIN_LAST_NAME,
+} as const;
 
 // Validate required environment variables
 const requiredEnvVars = ["DATABASE_URL", "JWT_SECRET"]

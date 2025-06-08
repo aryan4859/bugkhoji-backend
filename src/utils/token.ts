@@ -6,6 +6,67 @@ import { config } from "./config"
 const prisma = new PrismaClient()
 
 // ============================================================================
+// ACCESS TOKEN GENERATION
+// ============================================================================
+
+// Updated function signature to accept an object
+export const generateAccessToken = (user: { id: string; role: string; email?: string }): string => {
+  try {
+    const secret = config.JWT_SECRET;
+    if (!secret) {
+      throw new Error("JWT_SECRET not defined");
+    }
+
+    // Create payload for access token
+    const payload = {
+      id: user.id,
+      role: user.role,
+      type: "access",
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    // Set expiration time (1 hour)
+    const expiresIn = "1h";
+
+    // Generate JWT token with proper typing
+    const token = jwt.sign(payload, secret as Secret, {
+      expiresIn,
+    } as SignOptions);
+
+    return token;
+  } catch (error) {
+    throw new Error(`Failed to generate access token: ${error}`);
+  }
+};
+// Add a type for verifying access tokens
+interface AccessTokenPayload {
+  id: string;
+  role: string;
+  type: string;
+  iat: number;
+  exp: number;
+}
+
+export const verifyAccessToken = (token: string): AccessTokenPayload => {
+  const secret = config.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET not defined");
+  }
+
+  try {
+    const decoded = jwt.verify(token, secret as Secret) as AccessTokenPayload;
+    
+    if (decoded.type !== "access") {
+      throw new Error("Invalid token type");
+    }
+
+    return decoded;
+  } catch (error) {
+    throw new Error(`Invalid access token: ${error}`);
+  }
+};
+
+// ============================================================================
 // JWT TOKEN GENERATION
 // ============================================================================
 

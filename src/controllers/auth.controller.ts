@@ -44,7 +44,7 @@ export async function register(req: Request, res: Response) {
         firstName: validatedData.firstName,
         lastName: validatedData.lastName,
         username: validatedData.username,
-        role: "RESEARCHER", // Default role
+        role: "RESEARCHER", 
       },
     })
 

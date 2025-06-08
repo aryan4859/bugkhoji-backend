@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express"
 import bcrypt from "bcryptjs"
 import jwt, { type Secret, type SignOptions } from "jsonwebtoken"
 import { z } from "zod"
-import { PrismaClient } from "@prisma/client"
+import { PrismaClient, UserRole } from "@prisma/client"
 import rateLimit from "express-rate-limit"
 import { logger } from "../utils/logger"
 import { validate } from "../middleware/validate"
@@ -54,6 +54,20 @@ const registerSchema = z.object({
     .regex(/[a-z]/, "Password must contain at least one lowercase letter")
     .regex(/[0-9]/, "Password must contain at least one number")
     .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character"),
+})
+
+const organizationRegisterSchema = z.object({
+  organizationName: z.string().min(2, "Organization name must be at least 2 characters").max(100, "Organization name too long"),
+  email: z.string().email("Invalid email address"),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(128, "Password too long")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one number"),
+  website: z.string().url("Invalid website URL").optional(),
+  description: z.string().max(500, "Description too long").optional(),
 })
 
 // ============================================================================
@@ -193,6 +207,68 @@ router.post(
   }
 )
 
+/**
+ * 🏢 Organization Registration
+ */
+router.post(
+  "/register/organization",
+  authLimiter,
+  validate(organizationRegisterSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { email, password, organizationName, website, description } = req.body
+
+      logger.info(`Organization registration attempt for: ${organizationName}`)
+
+      // Check if organization email already exists
+      const existingOrg = await prisma.user.findUnique({
+        where: { email },
+      })
+
+      if (existingOrg) {
+        logger.warn(`Registration failed: Email already exists for ${email}`)
+        res.status(409).json({ message: "Email already exists" })
+        return
+      }
+
+      // Hash password
+      const passwordHash = await bcrypt.hash(password, 12)
+
+      // Create new organization user
+      const user = await prisma.user.create({
+        data: {
+          email,
+          passwordHash,
+          username: organizationName.toLowerCase().replace(/\s+/g, '_'),
+          firstName: organizationName,
+          lastName: '',
+          role: UserRole.ORGANIZATION,
+          isActive: false, // Organizations need admin approval
+          organizationProfile: { // Use create nested write
+            create: {
+              name: organizationName,
+              website: website || null,
+              description: description || null,
+            }
+          }
+        },
+        include: {
+          organizationProfile: true // Include the profile in the response
+        }
+      })
+
+      logger.info(`Organization registration successful for: ${user.id}`)
+      res.status(201).json({ 
+        message: "Registration successful. Please wait for admin approval to activate your account." 
+      })
+    } catch (err) {
+      logger.error("Server error during organization registration:", err)
+      res.status(500).json({ message: "Server error during registration" })
+    }
+  }
+)
+
+
 // ============================================================================
 // LOGIN ENDPOINTS
 // ============================================================================
@@ -317,6 +393,74 @@ router.post(
       logger.info(`Successful admin login for user: ${user.id}`)
     } catch (err) {
       logger.error("Admin login error:", err)
+      res.status(500).json({ message: "Server error during login" })
+    }
+  }
+)
+
+/**
+ * 🏢 Organization Login
+ */
+router.post(
+  "/login/organization",
+  authLimiter,
+  validate(loginSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { email, password } = req.body
+
+      logger.info(`Login attempt for organization email: ${email}`)
+
+      // Find organization by email
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: {
+          id: true,
+          email: true,
+          passwordHash: true,
+          role: true,
+          isActive: true,
+          username: true,
+          firstName: true,
+          lastName: true
+        },
+      })
+
+      // Ensure organization exists
+      if (!user) {
+        logger.warn(`Failed login attempt for organization email: ${email} - Organization not found`)
+        res.status(401).json({ message: "Invalid email or password" })
+        return
+      }
+
+      // Check if user is an organization and is active
+      if (user.role !== 'ORGANIZATION' as typeof user.role) {
+        logger.warn(`Failed login attempt for email: ${email} - Not an organization account`)
+        res.status(401).json({ message: "Invalid email or password" })
+        return
+      }
+
+      if (!user.isActive) {
+        logger.warn(`Failed login attempt for organization: ${email} - Account not activated`)
+        res.status(401).json({ 
+          message: "Account pending activation. Please wait for admin approval." 
+        })
+        return
+      }
+
+      // Verify password
+      const passwordMatch = await bcrypt.compare(password, user.passwordHash)
+      if (!passwordMatch) {
+        logger.warn(`Failed login attempt for organization: ${user.email} - Invalid password`)
+        res.status(401).json({ message: "Invalid email or password" })
+        return
+      }
+
+      // Handle successful login
+      await handleLoginSuccess(user, res)
+      logger.info(`Successful organization login for: ${user.id}`)
+    } catch (err) {
+      logger.error("Organization login error:", err)
       res.status(500).json({ message: "Server error during login" })
     }
   }

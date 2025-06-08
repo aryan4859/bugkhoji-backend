@@ -19,23 +19,92 @@ model User {
   firstName    String
   lastName     String
   email        String   @unique
-  passwordHash String   
+  passwordHash String
   role         UserRole @default(RESEARCHER)
   isActive     Boolean  @default(true)
-  
+
   // Authentication & Session Management
-  lastLogin            DateTime?
-  refreshTokenHash     String?   // Store hashed refresh tokens
-  refreshTokenExpiresAt DateTime? // Track token expiration
-  
+  lastLogin             DateTime?
+  refreshTokenHash      String?
+  refreshTokenExpiresAt DateTime?
+
   // Timestamps
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Audit Relations
+  auditLogs   AuditLog[] @relation("UserAuditLogs")
+  performedBy AuditLog[] @relation("PerformedByUser")
+
+  // Add this relation
+  organizationProfile OrganizationProfile?
 
   @@map("users")
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  action     AuditAction
+  entityType String // e.g., "User", "Program", etc.
+  entityId   String // ID of the affected record
+  oldData    Json? // Previous state (if applicable)
+  newData    Json? // New state (if applicable)
+
+  performedById String
+  performedBy   User   @relation("PerformedByUser", fields: [performedById], references: [id])
+
+  userId String?
+  user   User?   @relation("UserAuditLogs", fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([performedById])
+  @@index([userId])
+  @@map("audit_logs")
 }
 
 enum UserRole {
   ADMIN
   RESEARCHER
+  ORGANIZATION
+}
+
+enum AuditAction {
+  CREATED
+  UPDATED
+  DELETED
+  LOGIN
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGED
+  ROLE_CHANGED
+  ACCOUNT_DISABLED
+  ACCOUNT_ENABLED
+  TOKEN_REFRESH
+  REGISTER
+}
+
+model OrganizationProfile {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  name        String
+  website     String?
+  description String?
+  address     String?
+  phone       String?
+  logo        String? // URL to logo image
+  industry    String?
+  size        Int? // Number of employees
+  verified    Boolean @default(false)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("organization_profiles")
 }

@@ -1,54 +1,34 @@
-// import { PrismaClient } from "@prisma/client"
-// import type { Request } from "express"
-// import { auditLogger } from "./logger"
+import { PrismaClient, AuditAction } from "@prisma/client"
+import { Request } from "express"
+import { AuditLogData } from '../interfaces/audit.interface';
+import { logger } from "./logger"
 
-// const prisma = new PrismaClient()
+const prisma = new PrismaClient()
 
-// interface AuditLogData {
-//   userId: string
-//   action: string
-//   entity: string
-//   entityId: string
-//   details: string
-//   reportId?: string
-//   paymentId?: string
-// }
+export async function createAuditLog(
+  data: AuditLogData,
+  req: Request
+): Promise<void> {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        action: data.action as AuditAction,
+        entityType: data.entity,
+        entityId: data.entityId,
+        performedById: data.userId,
+        userId: data.userId,
+        newData: {
+          details: data.details,
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"],
+          reportId: data.reportId,
+          paymentId: data.paymentId,
+        },
+      },
+    })
 
-// /**
-//  * Create an audit log entry
-//  * @param data - Audit log data
-//  * @param req - Express request object for IP and user agent
-//  */
-// export async function createAuditLog(data: AuditLogData, req?: Request): Promise<void> {
-//   try {
-//     // Create audit log in database
-//     await prisma.auditLog.create({
-//       data: {
-//         userId: data.userId,
-//         action: data.action,
-//         entity: data.entity,
-//         entityId: data.entityId,
-//         details: data.details,
-//         ipAddress: req?.ip,
-//         userAgent: req?.headers["user-agent"],
-//         reportId: data.reportId,
-//         paymentId: data.paymentId,
-//       },
-//     })
-
-//     // Also log to audit log file
-//     auditLogger.info("Audit event", {
-//       userId: data.userId,
-//       action: data.action,
-//       entity: data.entity,
-//       entityId: data.entityId,
-//       details: data.details,
-//       ipAddress: req?.ip,
-//       userAgent: req?.headers["user-agent"],
-//       timestamp: new Date().toISOString(),
-//     })
-//   } catch (error) {
-//     // Log error but don't throw - audit logging should not break the application
-//     auditLogger.error("Failed to create audit log:", error)
-//   }
-// }
+    logger.info(`Audit log created - ${data.action} by user ${data.userId}`)
+  } catch (error) {
+    logger.error("Error creating audit log:", error)
+  }
+}

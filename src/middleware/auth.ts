@@ -6,24 +6,25 @@ import { config } from "../utils/config"
 
 const prisma = new PrismaClient()
 
-// Extend Request interface to include user
+// Update the Request interface definition
 declare global {
   namespace Express {
     interface Request {
       user?: {
         id: string
         email: string
-        role: "researcher" | "admin"
+        role: "researcher" | "admin" | "organization"
         isActive: boolean
       }
     }
   }
 }
 
+// Update the JwtPayload interface
 interface JwtPayload {
   id: string
   email: string
-  role: "researcher" | "admin"
+  role: "researcher" | "admin" | "organization"
   iat?: number
   exp?: number
 }
@@ -137,8 +138,7 @@ export async function authenticate(
         email: true, 
         role: true, 
         isActive: true,
-        lastLoginAt: true,
-        tokenVersion: true
+        lastLogin: true
       },
     })
 
@@ -176,7 +176,7 @@ export async function authenticate(
     // Update last login timestamp (optional)
     await prisma.user.update({
       where: { id: user.id },
-      data: { lastLoginAt: new Date() }
+      data: { lastLogin: new Date() }
     }).catch((error: unknown) => {
       logger.error(`Failed to update lastLoginAt for user ${user.id}:`, error)
     })
@@ -203,7 +203,7 @@ export async function authenticate(
   }
 }
 
-export function authorize(allowedRoles: Array<"researcher" | "admin">) {
+export function authorize(allowedRoles: Array<"researcher" | "admin" | "organization">) {
   return (req: Request, res: Response, next: NextFunction): void => {
     try {
       if (!req.user) {
@@ -238,9 +238,68 @@ export function authorize(allowedRoles: Array<"researcher" | "admin">) {
   }
 }
 
-// Utility function to require specific roles
+// Update utility functions
 export const requireAdmin = authorize(["admin"])
 export const requireResearcher = authorize(["researcher", "admin"])
+export const requireOrganization = authorize(["organization"])
+export const requireAny = authorize(["researcher", "admin", "organization"])
+
+// Check if user is an active organization
+export function requireActiveOrganization(req: Request, res: Response, next: NextFunction): void {
+  try {
+    if (!req.user) {
+      logger.warn("Organization authorization failed: No user in request")
+      res.status(401).json({ error: "Authentication required" })
+      return
+    }
+
+    if (req.user.role !== "organization") {
+      logger.warn(`Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access organization endpoint`)
+      res.status(403).json({ 
+        error: "Organization access required",
+        current: req.user.role
+      })
+      return
+    }
+
+    if (!req.user.isActive) {
+      logger.warn(`Organization authorization failed: Organization ${req.user.id} is inactive`)
+      res.status(403).json({ 
+        error: "Organization account is pending activation or has been deactivated"
+      })
+      return
+    }
+
+    next()
+  } catch (error) {
+    logger.error("Organization authorization error:", error)
+    res.status(500).json({ error: "Internal server error" })
+    return
+  }
+}
+
+// Combined middleware for verified organizations and admins
+export const requireOrganizationOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.user) {
+    logger.warn("Authorization failed: No user in request")
+    res.status(401).json({ error: "Authentication required" })
+    return
+  }
+
+  if (req.user.role !== "organization" && req.user.role !== "admin") {
+    logger.warn(`Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access protected endpoint`)
+    res.status(403).json({ error: "Insufficient privileges" })
+    return
+  }
+
+  if (!req.user.isActive) {
+    logger.warn(`Authorization failed: User ${req.user.id} is inactive`)
+    res.status(403).json({ error: "Account is inactive" })
+    return
+  }
+
+  next()
+}
 
 // Middleware to extract user info without requiring authentication (for optional auth)
 export async function optionalAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
