@@ -20,7 +20,6 @@ model User {
   lastName     String
   email        String   @unique
   passwordHash String
-  passwordHash String
   role         UserRole @default(RESEARCHER)
   isActive     Boolean  @default(true)
 
@@ -40,6 +39,8 @@ model User {
 
   // Add this relation
   organizationProfile OrganizationProfile?
+
+  sessions Session[]
 
   @@map("users")
 }
@@ -109,4 +110,19 @@ model OrganizationProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("organization_profiles")
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  ip          String
+  userAgent   String
+  location    String?
+  deviceInfo  Json
+  createdAt   DateTime @default(now())
+  lastSeen    DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
 }

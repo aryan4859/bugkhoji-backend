@@ -26,16 +26,19 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.15.1",
     "nodemon": "^3.1.10",
+    "rate-limiter-flexible": "^7.1.1",
     "ua-parser-js": "^2.0.3",
     "winston": "^3.17.0",
     "zod": "^3.25.56"
   },
   "devDependencies": {
+    "@types/axios": "^0.9.36",
     "@types/bcrypt": "^5.0.2",
     "@types/cors": "^2.8.18",
     "@types/express": "^5.0.2",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.15.30",
+    "@types/ua-parser-js": "^0.7.39",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   }

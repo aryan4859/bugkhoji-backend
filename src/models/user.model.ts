@@ -3,7 +3,7 @@ import mongoose, { Schema, Document } from "mongoose";
 export type UserRole = "researcher" | "admin";
 
 export interface IUser extends Document {
-  username: string; // unique key
+  username: string; 
   fullName: string;
   email: string;
   password: string;

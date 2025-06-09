@@ -78,6 +78,7 @@ export async function register(req: Request, res: Response) {
     });
 
     const { token: refreshToken } = await generateRefreshToken(user.id);
+    
 
     // Set refresh token as HTTP-only cookie
     res.cookie("refreshToken", refreshToken, {
@@ -162,6 +163,8 @@ export async function login(req: Request, res: Response) {
       role: user.role,
     });
 
+
+
     const { token: refreshToken } = await generateRefreshToken(user.id);
 
     // Set refresh token as HTTP-only cookie
@@ -195,7 +198,9 @@ export async function login(req: Request, res: Response) {
         role: user.role,
       },
       accessToken,
+      
     });
+    
   } catch (error) {
     logger.error("Login error:", error);
     const errorMessage =

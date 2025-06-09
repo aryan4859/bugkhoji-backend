@@ -1,66 +1,93 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, UserRole } from "@prisma/client";
 import { logger } from "../utils/logger";
 import { config } from "../utils/config";
+import { RateLimiterMemory } from "rate-limiter-flexible";
 
+// Singleton Prisma Client instance
 const prisma = new PrismaClient();
+
+// Enhanced rate limiting with RateLimiterFlexible
+const rateLimiter = new RateLimiterMemory({
+  points: 5,
+  duration: 15 * 60, 
+  blockDuration: 15 * 60, // Block for 15 minutes after limit reached
+});
 
 // Update the Request interface definition
 declare global {
   namespace Express {
     interface Request {
       user?: {
-        id: string
-        email: string
-        role: "researcher" | "admin" | "organization"
-        isActive: boolean
-      }
+        id: string;
+        email: string;
+        role: UserRole; 
+        isActive: boolean;
+        sessionId?: string;
+      };
+      authInfo?: {
+        clientIp: string;
+        userAgent: string;
+      };
     }
   }
 }
 
-// Update the JwtPayload interface
+// Strict JwtPayload interface with type guard
 interface JwtPayload {
-  id: string
-  email: string
-  role: "researcher" | "admin" | "organization"
-  iat?: number
-  exp?: number
+  id: string;
+  email: string;
+  role: UserRole;
+  sessionId?: string;
+  iat: number;
+  exp: number;
 }
 
-// Rate limiting map for failed authentication attempts
-const failedAttempts = new Map<string, { count: number; lastAttempt: Date }>();
-const MAX_FAILED_ATTEMPTS = 5;
-const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+function isJwtPayload(decoded: any): decoded is JwtPayload {
+  return (
+    decoded &&
+    typeof decoded.id === "string" &&
+    typeof decoded.email === "string" &&
+    Object.values(UserRole).includes(decoded.role) &&
+    typeof decoded.iat === "number" &&
+    typeof decoded.exp === "number"
+  );
+}
 
-function isRateLimited(ip: string): boolean {
-  const attempts = failedAttempts.get(ip);
-  if (!attempts) return false;
-
-  const timeSinceLastAttempt = Date.now() - attempts.lastAttempt.getTime();
-
-  // Reset attempts after lockout duration
-  if (timeSinceLastAttempt > LOCKOUT_DURATION) {
-    failedAttempts.delete(ip);
+// Constant-time string comparison to prevent timing attacks
+function secureCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) {
     return false;
   }
 
-  return attempts.count >= MAX_FAILED_ATTEMPTS;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
 }
 
-function recordFailedAttempt(ip: string): void {
-  const attempts = failedAttempts.get(ip) || {
-    count: 0,
-    lastAttempt: new Date(),
-  };
-  attempts.count += 1;
-  attempts.lastAttempt = new Date();
-  failedAttempts.set(ip, attempts);
+// Get client IP considering proxy headers
+function getClientIp(req: Request): string {
+  return (
+    (Array.isArray(req.headers["x-forwarded-for"])
+      ? req.headers["x-forwarded-for"][0]
+      : req.headers["x-forwarded-for"]) ||
+    req.ip ||
+    req.connection.remoteAddress ||
+    "unknown"
+  );
 }
 
-function clearFailedAttempts(ip: string): void {
-  failedAttempts.delete(ip);
+// Add this function to handle rate limiter errors
+async function checkRateLimit(ip: string): Promise<boolean> {
+  try {
+    await rateLimiter.consume(ip);
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
 export async function authenticate(
@@ -68,15 +95,20 @@ export async function authenticate(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  const clientIp = req.ip || req.connection.remoteAddress || "unknown";
+  const clientIp = getClientIp(req);
+  const userAgent = req.headers["user-agent"] || "unknown";
+  
+  // Store auth info in request for logging
+  req.authInfo = { clientIp, userAgent };
 
   try {
     // Check rate limiting
-    if (isRateLimited(clientIp)) {
+    try {
+      await rateLimiter.consume(clientIp);
+    } catch (rateLimiterRes) {
       logger.warn(`Rate limited authentication attempt from IP: ${clientIp}`);
       res.status(429).json({
-        error:
-          "Too many failed authentication attempts. Please try again later.",
+        error: "Too many failed authentication attempts. Please try again later.",
       });
       return;
     }
@@ -84,33 +116,31 @@ export async function authenticate(
     // Extract token from Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      recordFailedAttempt(clientIp);
+      logger.warn(`Missing or invalid Authorization header from IP: ${clientIp}`);
       res.status(401).json({ error: "Authorization token required" });
-      return;
+      return
     }
 
     const token = authHeader.split(" ")[1];
     if (!token || token.length === 0) {
-      recordFailedAttempt(clientIp);
+      logger.warn(`Empty token from IP: ${clientIp}`);
       res.status(401).json({ error: "Invalid token format" });
-      return;
+      return 
     }
 
     // Verify JWT secret exists
-    const jwtSecret = config.JWT_SECRET || process.env.JWT_SECRET;
+    const jwtSecret = config.JWT_SECRET;
     if (!jwtSecret) {
       logger.error("JWT_SECRET not configured");
       res.status(500).json({ error: "Server configuration error" });
       return;
     }
-
     // Verify and decode token
-    let decoded: JwtPayload;
+    let decoded: unknown;
     try {
-      decoded = jwt.verify(token, jwtSecret) as JwtPayload;
-    } catch (jwtError) {
-      recordFailedAttempt(clientIp);
+      decoded = jwt.verify(token, jwtSecret);
 
+    } catch (jwtError) {
       if (jwtError instanceof jwt.TokenExpiredError) {
         logger.warn(`Expired token from IP: ${clientIp}`);
         res.status(401).json({ error: "Token has expired" });
@@ -123,12 +153,13 @@ export async function authenticate(
         return;
       }
 
-      throw jwtError;
+      logger.error("Unexpected JWT error:", jwtError);
+      res.status(500).json({ error: "Internal server error" });
+      return 
     }
 
-    // Validate token payload
-    if (!decoded.id || !decoded.email || !decoded.role) {
-      recordFailedAttempt(clientIp);
+    // Validate token payload with type guard
+    if (!isJwtPayload(decoded)) {
       logger.warn(`Invalid token payload from IP: ${clientIp}`);
       res.status(401).json({ error: "Invalid token payload" });
       return;
@@ -142,60 +173,47 @@ export async function authenticate(
         email: true,
         role: true,
         isActive: true,
-        lastLogin: true
+        lastLogin: true,
       },
     });
 
     // Validate user exists and is active
     if (!user) {
-      recordFailedAttempt(clientIp);
       logger.warn(`Authentication failed: User ${decoded.id} not found`);
-      res.status(401).json({ error: "User not found" });
+      res.status(401).json({ error: "Authentication failed" });
       return;
     }
 
     if (!user.isActive) {
-      recordFailedAttempt(clientIp);
       logger.warn(`Authentication failed: User ${decoded.id} is inactive`);
-      res.status(401).json({ error: "Account is inactive" });
+      res.status(403).json({ error: "Account is inactive" });
       return;
     }
 
-    // Optional: Check token version for forced logout capability
-    // if (user.tokenVersion && decoded.tokenVersion !== user.tokenVersion) {
-    //   recordFailedAttempt(clientIp)
-    //   logger.warn(`Authentication failed: Token version mismatch for user ${decoded.id}`)
-    //   res.status(401).json({ error: "Token has been revoked" })
-    //   return
-    // }
-
-    // Verify email matches (additional security check)
-    if (user.email !== decoded.email) {
-      recordFailedAttempt(clientIp);
-      logger.warn(
-        `Authentication failed: Email mismatch for user ${decoded.id}`
-      );
+    // Verify email matches using constant-time comparison
+    if (!secureCompare(user.email, decoded.email)) {
+      logger.warn(`Authentication failed: Email mismatch for user ${decoded.id}`);
       res.status(401).json({ error: "Token validation failed" });
       return;
     }
 
-    // Update last login timestamp (optional)
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { lastLogin: new Date() }
-    }).catch((error: unknown) => {
-      logger.error(`Failed to update lastLoginAt for user ${user.id}:`, error)
-    })
+    // Update last login timestamp (fire and forget)
+    prisma.user
+      .update({
+        where: { id: user.id },
+        data: { lastLogin: new Date() },
+      })
+      .catch((error) => {
+        logger.error(`Failed to update lastLogin for user ${user.id}:`, error);
+      });
 
-    // Clear failed attempts on successful authentication
-    clearFailedAttempts(clientIp);
-
-    // Attach user to request
+    // Attach user and session to request
     req.user = {
       id: user.id,
       email: user.email,
-      role: user.role as "researcher" | "admin",
+      role: user.role,
       isActive: user.isActive,
+      sessionId: decoded.sessionId,
     };
 
     logger.info(
@@ -203,14 +221,12 @@ export async function authenticate(
     );
     next();
   } catch (error) {
-    recordFailedAttempt(clientIp);
-    logger.error("Authentication error:", error);
+    logger.error("Authentication error:", error instanceof Error ? error.message : "Unknown error");
     res.status(500).json({ error: "Internal server error" });
-    return;
   }
 }
 
-export function authorize(allowedRoles: Array<"researcher" | "admin" | "organization">) {
+export function authorize(allowedRoles: UserRole[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     try {
       if (!req.user) {
@@ -221,11 +237,7 @@ export function authorize(allowedRoles: Array<"researcher" | "admin" | "organiza
 
       if (!allowedRoles.includes(req.user.role)) {
         logger.warn(
-          `Authorization failed: User ${req.user.id} with role ${
-            req.user.role
-          } attempted to access endpoint requiring roles: ${allowedRoles.join(
-            ", "
-          )}`
+          `Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access endpoint requiring roles: ${allowedRoles.join(", ")}`
         );
         res.status(403).json({
           error: "Insufficient privileges",
@@ -235,86 +247,103 @@ export function authorize(allowedRoles: Array<"researcher" | "admin" | "organiza
         return;
       }
 
-      // Additional check for active status
-      if (!req.user.isActive) {
-        logger.warn(`Authorization failed: User ${req.user.id} is inactive`);
-        res.status(403).json({ error: "Account is inactive" });
-        return;
-      }
-
       next();
     } catch (error) {
       logger.error("Authorization error:", error);
       res.status(500).json({ error: "Internal server error" });
-      return;
     }
   };
 }
 
-// Update utility functions
-export const requireAdmin = authorize(["admin"])
-export const requireResearcher = authorize(["researcher", "admin"])
-export const requireOrganization = authorize(["organization"])
-export const requireAny = authorize(["researcher", "admin", "organization"])
+// Role-specific middleware
+export const requireAdmin = authorize([UserRole.ADMIN]);
+export const requireResearcher = authorize([UserRole.RESEARCHER]);
+export const requireOrganization = authorize([UserRole.ORGANIZATION]);
+export const requireAny = authorize([
+  UserRole.RESEARCHER,
+  UserRole.ADMIN,
+  UserRole.ORGANIZATION
+]);
 
-// Check if user is an active organization
-export function requireActiveOrganization(req: Request, res: Response, next: NextFunction): void {
+export function requireActiveOrganization(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
   try {
     if (!req.user) {
-      logger.warn("Organization authorization failed: No user in request")
-      res.status(401).json({ error: "Authentication required" })
-      return
+      logger.warn("Organization authorization failed: No user in request");
+      res.status(401).json({ error: "Authentication required" });
+      return;
     }
 
-    if (req.user.role !== "organization") {
-      logger.warn(`Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access organization endpoint`)
-      res.status(403).json({ 
+    if (req.user.role !== UserRole.ORGANIZATION) {
+      logger.warn(
+        `Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access organization endpoint`
+      );
+      res.status(403).json({
         error: "Organization access required",
-        current: req.user.role
-      })
-      return
+        current: req.user.role,
+      });
+      return;
     }
 
     if (!req.user.isActive) {
-      logger.warn(`Organization authorization failed: Organization ${req.user.id} is inactive`)
-      res.status(403).json({ 
-        error: "Organization account is pending activation or has been deactivated"
-      })
-      return
+      logger.warn(
+        `Organization authorization failed: Organization ${req.user.id} is inactive`
+      );
+      res.status(403).json({
+        error: "Organization account is pending activation or has been deactivated",
+      });
+      return;
     }
 
-    next()
+    next();
   } catch (error) {
-    logger.error("Organization authorization error:", error)
-    res.status(500).json({ error: "Internal server error" })
-    return
+    logger.error(
+      "Organization authorization error:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+    res.status(500).json({ error: "Internal server error" });
   }
 }
 
-// Combined middleware for verified organizations and admins
-export const requireOrganizationOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (!req.user) {
-    logger.warn("Authorization failed: No user in request")
-    res.status(401).json({ error: "Authentication required" })
-    return
+export const requireOrganizationOrAdmin = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  try {
+    if (!req.user) {
+      logger.warn("Authorization failed: No user in request");
+      res.status(401).json({ error: "Authentication required" });
+      return 
+    }
+
+    if (req.user.role !== UserRole.ORGANIZATION && req.user.role !== UserRole.ADMIN) {
+      logger.warn(
+        `Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access protected endpoint`
+      );
+      res.status(403).json({ error: "Insufficient privileges" });
+      return;
+    }
+
+    if (!req.user.isActive) {
+      logger.warn(`Authorization failed: User ${req.user.id} is inactive`);
+      res.status(403).json({ error: "Account is inactive" });
+      return 
+    }
+
+    next();
+  } catch (error) {
+    logger.error(
+      "Authorization error:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+    res.status(500).json({ error: "Internal server error" });
   }
+};
 
-  if (req.user.role !== "organization" && req.user.role !== "admin") {
-    logger.warn(`Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access protected endpoint`)
-    res.status(403).json({ error: "Insufficient privileges" })
-    return
-  }
-
-  if (!req.user.isActive) {
-    logger.warn(`Authorization failed: User ${req.user.id} is inactive`)
-    res.status(403).json({ error: "Account is inactive" })
-    return
-  }
-
-  next()
-}
-
-// Middleware to extract user info without requiring authentication (for optional auth)
 export async function optionalAuth(
   req: Request,
   res: Response,
@@ -323,50 +352,55 @@ export async function optionalAuth(
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    next();
-    return;
+    return next();
   }
 
   try {
     const token = authHeader.split(" ")[1];
-    const jwtSecret = config.JWT_SECRET || process.env.JWT_SECRET;
+    const jwtSecret = config.JWT_SECRET;
 
     if (!jwtSecret || !token) {
-      next();
-      return;
+      return next();
     }
 
-    const decoded = jwt.verify(token, jwtSecret) as JwtPayload;
+    const decoded = jwt.verify(token, jwtSecret);
+    if (!isJwtPayload(decoded)) {
+      return next();
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
       select: { id: true, email: true, role: true, isActive: true },
     });
 
-    if (user && user.isActive) {
+    if (user && user.isActive && secureCompare(user.email, decoded.email)) {
       req.user = {
         id: user.id,
         email: user.email,
-        role: user.role as "researcher" | "admin",
+        role: user.role,
         isActive: user.isActive,
       };
     }
   } catch (error) {
-    // Silently fail for optional auth
-    logger.debug("Optional auth failed:", error);
+    // Silently fail for optional auth but log for debugging
+    logger.debug("Optional auth failed:", error instanceof Error ? error.message : "Unknown error");
   }
 
   next();
 }
 
-// Cleanup function to remove expired rate limit entries
-export function cleanupRateLimitMap(): void {
-  const now = Date.now();
-  for (const [ip, attempts] of failedAttempts.entries()) {
-    if (now - attempts.lastAttempt.getTime() > LOCKOUT_DURATION) {
-      failedAttempts.delete(ip);
-    }
+// Proper cleanup
+const cleanup = async () => {
+  try {
+    await prisma.$disconnect();
+    logger.info('Database connection closed');
+  } catch (error) {
+    logger.error('Error during cleanup:', error);
+    process.exit(1);
   }
-}
+};
 
-// Run cleanup every hour
-setInterval(cleanupRateLimitMap, 60 * 60 * 1000);
+process.on('SIGTERM', cleanup);
+process.on('SIGINT', cleanup);
+process.on('beforeExit', cleanup);
+

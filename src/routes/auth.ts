@@ -8,6 +8,8 @@ import { logger } from "../utils/logger"
 import { validate } from "../middleware/validate"
 import { config } from "../utils/config"
 import { generateRefreshToken } from "../utils/token"
+import { getSessions } from '../controllers/session.controller';
+import { authenticate } from '../middleware/auth';
 
 const router = Router()
 const prisma = new PrismaClient()
@@ -57,17 +59,32 @@ const registerSchema = z.object({
 })
 
 const organizationRegisterSchema = z.object({
-  organizationName: z.string().min(2, "Organization name must be at least 2 characters").max(100, "Organization name too long"),
-  email: z.string().email("Invalid email address"),
+  organizationName: z.string()
+    .min(2, "Organization name must be at least 2 characters")
+    .max(100, "Organization name too long")
+    .trim(), // Add trim to remove whitespace
+  email: z.string()
+    .email("Invalid email address")
+    .toLowerCase() // Normalize email case
+    .trim(),
   password: z
     .string()
     .min(8, "Password must be at least 8 characters")
     .max(128, "Password too long")
     .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
     .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-    .regex(/[0-9]/, "Password must contain at least one number"),
-  website: z.string().url("Invalid website URL").optional(),
-  description: z.string().max(500, "Description too long").optional(),
+    .regex(/[0-9]/, "Password must contain at least one number")
+    .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character"), // Add special char requirement
+  website: z.string()
+    .url("Invalid website URL")
+    .trim()
+    .optional()
+    .or(z.literal("")), // Allow empty string
+  description: z.string()
+    .max(500, "Description too long")
+    .trim()
+    .optional()
+    .or(z.literal("")), // Allow empty string
 })
 
 // ============================================================================
@@ -231,38 +248,74 @@ router.post(
         return
       }
 
+      // Generate username and check for conflicts
+      let baseUsername = organizationName.toLowerCase()
+        .replace(/[^a-z0-9]/g, '_') // Replace non-alphanumeric with underscore
+        .replace(/_+/g, '_') // Replace multiple underscores with single
+        .replace(/^_+|_+$/g, '') // Remove leading/trailing underscores
+        .substring(0, 30) // Limit length
+
+      let username = baseUsername
+      let counter = 1
+      
+      // Ensure username uniqueness
+      while (await prisma.user.findUnique({ where: { username } })) {
+        username = `${baseUsername}_${counter}`
+        counter++
+      }
+
       // Hash password
       const passwordHash = await bcrypt.hash(password, 12)
 
-      // Create new organization user
-      const user = await prisma.user.create({
-        data: {
-          email,
-          passwordHash,
-          username: organizationName.toLowerCase().replace(/\s+/g, '_'),
-          firstName: organizationName,
-          lastName: '',
-          role: UserRole.ORGANIZATION,
-          isActive: false, // Organizations need admin approval
-          organizationProfile: { // Use create nested write
-            create: {
-              name: organizationName,
-              website: website || null,
-              description: description || null,
+      // Create new organization user with transaction
+      const user = await prisma.$transaction(async (tx) => {
+        return await tx.user.create({
+          data: {
+            email,
+            passwordHash,
+            username,
+            firstName: organizationName,
+            lastName: '',
+            role: UserRole.ORGANIZATION,
+            isActive: false, // Organizations need admin approval
+            organizationProfile: {
+              create: {
+                name: organizationName,
+                website: website || null,
+                description: description || null,
+              }
             }
+          },
+          include: {
+            organizationProfile: true
           }
-        },
-        include: {
-          organizationProfile: true // Include the profile in the response
-        }
+        })
       })
 
-      logger.info(`Organization registration successful for: ${user.id}`)
+      // Don't log sensitive data in production
+      logger.info(`Organization registration successful for user ID: ${user.id}`)
+      
+      // Don't return sensitive user data
       res.status(201).json({ 
-        message: "Registration successful. Please wait for admin approval to activate your account." 
+        message: "Registration successful. Please wait for admin approval to activate your account.",
+        userId: user.id // Only return non-sensitive identifier if needed
       })
+      
     } catch (err) {
-      logger.error("Server error during organization registration:", err)
+      // Handle specific Prisma errors
+      if (err instanceof Error) {
+        if (err.message.includes('Unique constraint')) {
+          logger.warn(`Registration failed: Duplicate data for ${req.body.organizationName}`)
+          res.status(409).json({ message: "Registration data conflicts with existing account" })
+          return
+        }
+      }
+      
+      logger.error("Server error during organization registration:", {
+        error: err instanceof Error ? err.message : 'Unknown error',
+        organizationName: req.body.organizationName,
+        email: req.body.email
+      })
       res.status(500).json({ message: "Server error during registration" })
     }
   }
@@ -568,5 +621,7 @@ router.post("/logout", async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({ error: "Internal server error" })
   }
 })
+
+router.get('/sessions', authenticate, getSessions);
 
 export default router

@@ -11,6 +11,7 @@ import helmet from "helmet";
 import { loginLimiter } from "./middleware/ratelimiter";
 import  {logger} from "./utils/logger";
 import { seedAdmin } from "./utils/adminSeeder";
+import auditRoutes from './routes/audit'
 
 const app: Express = express();
 import { connectDB, disconnectDB } from './database/database';
@@ -42,6 +43,7 @@ app.use(express.json());
 app.use("/v1", authRoutes);
 app.use("/login/researcher", loginLimiter);
 app.use("/login/admin", loginLimiter);
+app.use('/api/audit', auditRoutes)
 
 app.use((err: any, req: Request, res: Response, next: NextFunction): void => {
   logger.error(`${err.message} - ${req.method} ${req.originalUrl} - ${req.ip}`);
