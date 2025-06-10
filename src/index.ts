@@ -8,13 +8,13 @@ import { config } from "./utils/config";
 import authRoutes from "./routes/auth";
 import cors from "cors";
 import helmet from "helmet";
-import { loginLimiter } from "./middleware/ratelimiter";
-import  {logger} from "./utils/logger";
+import { rateLimiting } from "./middleware/ratelimiter";
+import { logger } from "./utils/logger";
 import { seedAdmin } from "./utils/adminSeeder";
-import auditRoutes from './routes/audit'
+import auditRoutes from "./routes/audit";
 
 const app: Express = express();
-import { connectDB, disconnectDB } from './database/database';
+import { connectDB, disconnectDB } from "./database/database";
 const CORS_WHITELIST = [
   "http://localhost:4001",
   "https://bugkhoji.com",
@@ -41,9 +41,9 @@ app.use(
 
 app.use(express.json());
 app.use("/v1", authRoutes);
-app.use("/login/researcher", loginLimiter);
-app.use("/login/admin", loginLimiter);
-app.use('/api/audit', auditRoutes)
+app.use("/login/researcher", rateLimiting);
+app.use("/login/admin", rateLimiting);
+app.use("/api/audit", auditRoutes);
 
 app.use((err: any, req: Request, res: Response, next: NextFunction): void => {
   logger.error(`${err.message} - ${req.method} ${req.originalUrl} - ${req.ip}`);
@@ -59,24 +59,24 @@ app.use((err: any, req: Request, res: Response, next: NextFunction): void => {
 const PORT = config.PORT;
 
 async function startServer() {
-  await connectDB()
-  await seedAdmin()
-  
+  await connectDB();
+  await seedAdmin();
+
   app.listen(PORT, () => {
-    console.log(`Bugkhoj server is running at ${PORT}`)
-    logger.info(`🚀 Bugkhoj server is running at http://localhost:${PORT}`)
-  })
+    console.log(`Bugkhoj server is running at ${PORT}`);
+    logger.info(`🚀 Bugkhoj server is running at http://localhost:${PORT}`);
+  });
 }
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('🔄 Shutting down gracefully...');
+process.on("SIGINT", async () => {
+  console.log("🔄 Shutting down gracefully...");
   await disconnectDB();
   process.exit(0);
 });
 
-process.on('SIGTERM', async () => {
-  console.log('🔄 Shutting down gracefully...');
+process.on("SIGTERM", async () => {
+  console.log("🔄 Shutting down gracefully...");
   await disconnectDB();
   process.exit(0);
 });
