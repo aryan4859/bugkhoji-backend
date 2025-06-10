@@ -10,6 +10,7 @@ import { config } from "../utils/config";
 import { generateRefreshToken } from "../utils/token";
 import { getSessions } from "../controllers/session.controller";
 import { authenticate } from "../middleware/auth";
+import { rateLimiting } from "../middleware/ratelimiter";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -342,11 +343,9 @@ router.post(
           logger.warn(
             `Registration failed: Duplicate data for ${req.body.organizationName}`
           );
-          res
-            .status(409)
-            .json({
-              message: "Registration data conflicts with existing account",
-            });
+          res.status(409).json({
+            message: "Registration data conflicts with existing account",
+          });
           return;
         }
       }
@@ -684,6 +683,6 @@ router.post("/logout", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-router.get("/sessions", authenticate, getSessions);
+router.get("/sessions", rateLimiting, authenticate, getSessions);
 
 export default router;
