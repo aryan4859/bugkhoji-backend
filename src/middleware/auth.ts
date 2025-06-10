@@ -11,7 +11,7 @@ const prisma = new PrismaClient();
 // Enhanced rate limiting with RateLimiterFlexible
 const rateLimiter = new RateLimiterMemory({
   points: 5,
-  duration: 15 * 60, 
+  duration: 15 * 60,
   blockDuration: 15 * 60, // Block for 15 minutes after limit reached
 });
 
@@ -22,7 +22,7 @@ declare global {
       user?: {
         id: string;
         email: string;
-        role: UserRole; 
+        role: UserRole;
         isActive: boolean;
         sessionId?: string;
       };
@@ -97,7 +97,7 @@ export async function authenticate(
 ): Promise<void> {
   const clientIp = getClientIp(req);
   const userAgent = req.headers["user-agent"] || "unknown";
-  
+
   // Store auth info in request for logging
   req.authInfo = { clientIp, userAgent };
 
@@ -108,7 +108,8 @@ export async function authenticate(
     } catch (rateLimiterRes) {
       logger.warn(`Rate limited authentication attempt from IP: ${clientIp}`);
       res.status(429).json({
-        error: "Too many failed authentication attempts. Please try again later.",
+        error:
+          "Too many failed authentication attempts. Please try again later.",
       });
       return;
     }
@@ -116,16 +117,18 @@ export async function authenticate(
     // Extract token from Authorization header
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      logger.warn(`Missing or invalid Authorization header from IP: ${clientIp}`);
+      logger.warn(
+        `Missing or invalid Authorization header from IP: ${clientIp}`
+      );
       res.status(401).json({ error: "Authorization token required" });
-      return
+      return;
     }
 
     const token = authHeader.split(" ")[1];
     if (!token || token.length === 0) {
       logger.warn(`Empty token from IP: ${clientIp}`);
       res.status(401).json({ error: "Invalid token format" });
-      return 
+      return;
     }
 
     // Verify JWT secret exists
@@ -139,7 +142,6 @@ export async function authenticate(
     let decoded: unknown;
     try {
       decoded = jwt.verify(token, jwtSecret);
-
     } catch (jwtError) {
       if (jwtError instanceof jwt.TokenExpiredError) {
         logger.warn(`Expired token from IP: ${clientIp}`);
@@ -155,7 +157,7 @@ export async function authenticate(
 
       logger.error("Unexpected JWT error:", jwtError);
       res.status(500).json({ error: "Internal server error" });
-      return 
+      return;
     }
 
     // Validate token payload with type guard
@@ -192,7 +194,9 @@ export async function authenticate(
 
     // Verify email matches using constant-time comparison
     if (!secureCompare(user.email, decoded.email)) {
-      logger.warn(`Authentication failed: Email mismatch for user ${decoded.id}`);
+      logger.warn(
+        `Authentication failed: Email mismatch for user ${decoded.id}`
+      );
       res.status(401).json({ error: "Token validation failed" });
       return;
     }
@@ -221,7 +225,10 @@ export async function authenticate(
     );
     next();
   } catch (error) {
-    logger.error("Authentication error:", error instanceof Error ? error.message : "Unknown error");
+    logger.error(
+      "Authentication error:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
     res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -237,7 +244,11 @@ export function authorize(allowedRoles: UserRole[]) {
 
       if (!allowedRoles.includes(req.user.role)) {
         logger.warn(
-          `Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access endpoint requiring roles: ${allowedRoles.join(", ")}`
+          `Authorization failed: User ${req.user.id} with role ${
+            req.user.role
+          } attempted to access endpoint requiring roles: ${allowedRoles.join(
+            ", "
+          )}`
         );
         res.status(403).json({
           error: "Insufficient privileges",
@@ -262,7 +273,7 @@ export const requireOrganization = authorize([UserRole.ORGANIZATION]);
 export const requireAny = authorize([
   UserRole.RESEARCHER,
   UserRole.ADMIN,
-  UserRole.ORGANIZATION
+  UserRole.ORGANIZATION,
 ]);
 
 export function requireActiveOrganization(
@@ -293,7 +304,8 @@ export function requireActiveOrganization(
         `Organization authorization failed: Organization ${req.user.id} is inactive`
       );
       res.status(403).json({
-        error: "Organization account is pending activation or has been deactivated",
+        error:
+          "Organization account is pending activation or has been deactivated",
       });
       return;
     }
@@ -317,10 +329,13 @@ export const requireOrganizationOrAdmin = (
     if (!req.user) {
       logger.warn("Authorization failed: No user in request");
       res.status(401).json({ error: "Authentication required" });
-      return 
+      return;
     }
 
-    if (req.user.role !== UserRole.ORGANIZATION && req.user.role !== UserRole.ADMIN) {
+    if (
+      req.user.role !== UserRole.ORGANIZATION &&
+      req.user.role !== UserRole.ADMIN
+    ) {
       logger.warn(
         `Authorization failed: User ${req.user.id} with role ${req.user.role} attempted to access protected endpoint`
       );
@@ -331,7 +346,7 @@ export const requireOrganizationOrAdmin = (
     if (!req.user.isActive) {
       logger.warn(`Authorization failed: User ${req.user.id} is inactive`);
       res.status(403).json({ error: "Account is inactive" });
-      return 
+      return;
     }
 
     next();
@@ -383,7 +398,10 @@ export async function optionalAuth(
     }
   } catch (error) {
     // Silently fail for optional auth but log for debugging
-    logger.debug("Optional auth failed:", error instanceof Error ? error.message : "Unknown error");
+    logger.debug(
+      "Optional auth failed:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
   }
 
   next();
@@ -393,14 +411,13 @@ export async function optionalAuth(
 const cleanup = async () => {
   try {
     await prisma.$disconnect();
-    logger.info('Database connection closed');
+    logger.info("Database connection closed");
   } catch (error) {
-    logger.error('Error during cleanup:', error);
+    logger.error("Error during cleanup:", error);
     process.exit(1);
   }
 };
 
-process.on('SIGTERM', cleanup);
-process.on('SIGINT', cleanup);
-process.on('beforeExit', cleanup);
-
+process.on("SIGTERM", cleanup);
+process.on("SIGINT", cleanup);
+process.on("beforeExit", cleanup);
